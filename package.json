@@ -6,8 +6,8 @@
   "browser": "./lib/",
   "scripts": {
     "test": "npm run test-memdown && npm run test-leveldown",
-    "test-leveldown": "ADAPTER=leveldown mocha test/**.js",
-    "test-memdown": "ADAPTER=memdown mocha test/**.js",
+    "test-leveldown": "cross-env ADAPTER=leveldown && mocha test/**.js",
+    "test-memdown": "cross-env ADAPTER=memdown && mocha test/**.js",
     "test-travis": "nyc --reporter=html --reporter=text npm test",
     "prepublish": "npm run build",
     "build": "babel ./index.js ./log.js -d ./lib"
@@ -41,6 +41,7 @@
     "tick-tock": "1.0.x"
   },
   "devDependencies": {
+    "cross-env": "5.2.0",
     "@babel/cli": "^7.0.0-beta.38",
     "@babel/core": "^7.0.0-beta.38",
     "@babel/preset-env": "^7.0.0-beta.38",

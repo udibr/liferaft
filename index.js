@@ -823,12 +823,12 @@ class Raft extends EventEmitter {
     //
     if (raft.address === address) return;
 
-  var node = raft.clone({
-    self: raft,
-    write: write,       // Optional function that receives our writes.
-    address: address,   // A custom address for the raft we added.
-    state: Raft.CHILD   // We are a raft in the cluster.
-  });
+    var node = raft.clone({
+      self: raft,
+      write: write,       // Optional function that receives our writes.
+      address: address,   // A custom address for the raft we added.
+      state: Raft.CHILD   // We are a raft in the cluster.
+    });
 
     node.once('end', function end() {
       raft.leave(node);
