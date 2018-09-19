@@ -291,6 +291,9 @@ class Raft extends EventEmitter {
         break;
 
         case 'append':
+          if (!raft.log) {
+            return;
+          }
           const {term, index} = await raft.log.getLastInfo();
 
           // We do not have the last index as our last entry
@@ -702,7 +705,7 @@ class Raft extends EventEmitter {
     // Broadcast the voting request to all connected rafts in your private
     // cluster.
     //
-    const packet = await raft.packet('vote')
+    const packet = await raft.packet('vote');
 
     raft.message(Raft.FOLLOWER, packet);
 
