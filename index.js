@@ -391,7 +391,7 @@ class Raft extends EventEmitter {
       raft.heartbeat(raft.timeout());
     }
 
-    if ('function' === raft.type(raft.initialize)) {
+    if ('function' === raft.type(raft.initialize) || 'asyncfunction' === raft.type(raft.initialize)) {
       if (raft.initialize.length === 2) return raft.initialize(options, initialize);
       raft.initialize(options);
     }

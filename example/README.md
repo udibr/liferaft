@@ -7,6 +7,15 @@ And in Raft, we will continue to attempt to send a message until we get
 a successful callback. In order to fix this we've set the `hwm` (high water mark)
 option of axon to `-1` to turn the queueing off.
 
+## Installation
+```
+cd ..
+nvm use 10.9.0
+npm i
+cd example
+npm i
+```
+
 ## Starting the cluster
 
 We assume 6 node cluster in this example this is so we can at least turn one
