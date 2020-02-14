@@ -11,7 +11,7 @@ const PeerId = require('peer-id')
 const PeerInfo = require('peer-info')
 const pipe = require('it-pipe')
 
-const Libp2p = require('libp2p')
+const libp2p = require('libp2p')
 const TCP = require('libp2p-tcp')
 
 const WS = require('libp2p-websockets')
@@ -26,23 +26,23 @@ const argv = require('argh').argv
 const myId = peers[+argv.port || 0].id;
 
 async function run () {
-  const listenerIdConfig = peers.find(x=>(x.id===myId))
-  const listenerId = await PeerId.createFromJSON(listenerIdConfig)
+  const myIdConfig = peers.find(x=>(x.id===myId))
+  const myPeerId = await PeerId.createFromJSON(myIdConfig)
 
   // Listener libp2p node
-  const listenerPeerInfo = new PeerInfo(listenerId)
+  const myPeerInfo = new PeerInfo(myPeerId)
   // listenerPeerInfo.multiaddrs.add('/ip4/0.0.0.0/tcp/'+listenerIdConfig.port)
 
   // Add the signaling server address, along with our PeerId to our multiaddrs list
   // libp2p will automatically attempt to dial to the signaling server so that it can
   // receive inbound connections from other peers
   const webrtcAddr = '/ip4/0.0.0.0/tcp/9090/wss/p2p-webrtc-star'
-  listenerPeerInfo.multiaddrs.add(webrtcAddr)
+  myPeerInfo.multiaddrs.add(webrtcAddr)
 
 
   // Create our libp2p node
-  const libp2p = await Libp2p.create({
-    peerInfo: listenerPeerInfo,
+  const myNode = new libp2p({
+    peerInfo: myPeerInfo,
     modules: {
       transport: [WS, WStar],
       connEncryption: [secio],
@@ -76,22 +76,43 @@ async function run () {
   }
 
   // Listen for new peers
-  libp2p.on('peer:discovery', (peerInfo) => {
+  myNode.on('peer:discovery', (peerInfo) => {
     log(`Found peer ${peerInfo.id.toB58String()}`)
   })
 
   // Listen for new connections to peers
-  libp2p.on('peer:connect', (peerInfo) => {
-    log(`Connected to ${peerInfo.id.toB58String()}`)
+  myNode.on('peer:connect', async (peerInfo) => {
+    const { stream } = await myNode.dialProtocol(peerInfo, '/echo/1.0.0')
+
+    log(`dialed ${peerInfo.id.toB58String()} on protocol: /echo/1.0.0`)
+
+    pipe(
+      // Source data
+      ['hey'],
+      // Write to the stream, and pass its output to the next function
+      stream,
+      // Sink function
+      async function (source) {
+        // For each chunk of data
+        for await (const data of source) {
+          // Output the data
+          log(`received echo: ${data.toString()}`)
+        }
+      }
+    )
   })
 
   // Listen for peers disconnecting
-  libp2p.on('peer:disconnect', (peerInfo) => {
+  myNode.on('peer:disconnect', (peerInfo) => {
     log(`Disconnected from ${peerInfo.id.toB58String()}`)
   })
 
-  await libp2p.start()
-  log(`libp2p id is ${libp2p.peerInfo.id.toB58String()}`)
+  await myNode.handle('/echo/1.0.0', ({ stream }) => {
+    pipe(stream.source, stream.sink)
+  })
+
+  await myNode.start()
+  log(`my libp2p node id is ${myNode.peerInfo.id.toB58String()}`)
 }
 
 run()
