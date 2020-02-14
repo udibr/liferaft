@@ -150,6 +150,7 @@ class TCPRaft extends LifeRaft {
         // Dial to the remote peer (the "listener")
         let nodeDialer = await nodeDialerPromise
         const r = await nodeDialer.dialProtocol(peerListener, '/chat/1.0.0')
+        console.log('Dialer dialed to listener on protocol: /chat/1.0.0')
         stream = r.stream
 
         this.streams[this.address] = stream
