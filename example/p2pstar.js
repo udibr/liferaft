@@ -1,6 +1,10 @@
 // In a different window go to the root of the project and run
 //    npm i
 //    node node_modules/.bin/star-signal
+// run several nodes
+//    node p2pstar.js --port 0
+//    node p2pstar.js --port 1
+//    node p2pstar.js --port 2
 const wrtc = require('wrtc') // needed when using node
 const WStar = require('libp2p-webrtc-star')
 

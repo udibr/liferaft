@@ -1,66 +1,61 @@
-// merging tcp.js with https://github.com/libp2p/js-libp2p/tree/master/examples/chat
+//
+// Create a custom Raft instance which uses libp2p-webrtc-star to
+// communicate back and forth.
+//
+// merging tcp.js with https://github.com/libp2p/js-libp2p/tree/master/examples/
+//
+// In a different window go to the root of the project and run signaling server
+//    npm i
+//    node node_modules/.bin/star-signal
+// run several nodes
+//    node p2p.js --port 0
+//    node p2p.js --port 1
+//    node p2p.js --port 2
+//    node p2p.js --port 3
+//
 const debug = require('diagnostics')('raft')
   , argv = require('argh').argv
   , LifeRaft = require('../')
-  , net = require('net');
 
-// Each node has a libp2p id, privKey and pubKey. The privKey should be of course kept private in the real world.
-const peers = require('./peers')
+const wrtc = require('wrtc') // needed when using node
+const WStar = require('libp2p-webrtc-star')
+// our local signaling server
+const webrtcAddr = '/ip4/0.0.0.0/tcp/9090/wss/p2p-webrtc-star'
+// for practical demos and experimentation you can use p2p-webrtc-star signaling server
+// instead of running your own local signaling server
+// it *should not be used for apps in production*:
+// const webrtcAddr = '/dns4/star-signal.cloud.ipfs.team/wss/p2p-webrtc-star'
 
 const PeerId = require('peer-id')
 const PeerInfo = require('peer-info')
 const pipe = require('it-pipe')
+const lp = require('it-length-prefixed')
 
-const Libp2p = require('libp2p')
+const libp2p = require('libp2p')
 const TCP = require('libp2p-tcp')
+
 const WS = require('libp2p-websockets')
 const mplex = require('libp2p-mplex')
 const secio = require('libp2p-secio')
+const Boostrap = require('libp2p-bootstrap')
 
 //
 // We're going to start with a static list of servers. A minimum cluster size is
 // 4 as that only requires majority of 3 servers to have a new leader to be
 // assigned. This allows the failure of one single server.
 //
+// Each node has a libp2p id, privKey and pubKey. The privKey should be of course kept private in the real world.
+const peers = require('./peers')
 
 
 //
-// The port index of this Node process.
+// The port command line argument is the index of this Node process.
 //
-const port = peers[+argv.port || 0].id;
+const myId = peers[+argv.port || 0].id
 
-async function createDialer(myId) {
-  const idDialerConfig = peers.find(x => (x.id === myId))
-  const idDialer = await PeerId.createFromJSON(idDialerConfig)
+let streams = {}
 
-  // Create a new libp2p node on localhost with a randomly chosen port
-  const peerDialer = new PeerInfo(idDialer)
-  peerDialer.multiaddrs.add('/ip4/0.0.0.0/tcp/0')
-  const nodeDialer = new Libp2p({
-    peerInfo: peerDialer,
-    modules: {
-      transport: [
-        TCP,
-        WS
-      ],
-      streamMuxer: [mplex],
-      connEncryption: [secio]
-    }
-  })
-
-  // Start the libp2p host
-  await nodeDialer.start()
-
-  return nodeDialer
-}
-const nodeDialerPromise = createDialer(port)
-
-//
-// Create a custom Raft instance which uses a plain TCP server and client to
-// communicate back and forth.
-//
 class TCPRaft extends LifeRaft {
-
   /**
    * Initialized, start connecting all the things.
    *
@@ -68,57 +63,109 @@ class TCPRaft extends LifeRaft {
    * @api private
    */
   async initialize (options) {
-    this.streams = {}
-    const listenerIdConfig = peers.find(x=>(x.id===this.address))
-    const listenerId = await PeerId.createFromJSON(listenerIdConfig)
+    const myIdConfig = peers.find(x=>(x.id===this.address))
+    const myPeerId = await PeerId.createFromJSON(myIdConfig)
 
     // Listener libp2p node
-    const listenerPeerInfo = new PeerInfo(listenerId)
-    listenerPeerInfo.multiaddrs.add('/ip4/0.0.0.0/tcp/'+listenerIdConfig.port)
-    const listenerNode = new Libp2p({
-      peerInfo: listenerPeerInfo,
+    const myPeerInfo = new PeerInfo(myPeerId)
+
+    // Add the signaling server address, along with our PeerId to our multiaddrs list
+    // libp2p will automatically attempt to dial to the signaling server so that it can
+    // receive inbound connections from other peers
+    myPeerInfo.multiaddrs.add(webrtcAddr)
+
+    // Create our libp2p node
+    const myNode = new libp2p({
+      peerInfo: myPeerInfo,
       modules: {
-        transport: [
-          TCP,
-          WS
-        ],
-        streamMuxer: [ mplex ],
-        connEncryption: [ secio ]
+        transport: [WS, WStar],
+        connEncryption: [secio],
+        streamMuxer: [mplex],
+      },
+      config: {
+        transport: {
+          WebRTCStar: {
+            wrtc: wrtc  // needed when using node
+          }
+        }
       }
     })
 
-    // Log a message when we receive a connection
-    listenerNode.on('peer:connect', (peerInfo) => {
-      console.log('received dial to me from:', peerInfo.id.toB58String())
+    function log(txt) {
+      console.info(txt)
+    }
+
+    // Listen for new peers
+    myNode.on('peer:discovery', (peerInfo) => {
+      log(`Found peer ${peerInfo.id.toB58String()}`)
+    })
+
+    // Listen for new connections to peers
+    myNode.on('peer:connect', async (peerInfo) => {
+      const { stream } = await myNode.dialProtocol(peerInfo, '/echo/1.0.0')
+
+      log(`dialed ${peerInfo.id.toB58String()} on protocol: /echo/1.0.0`)
+      streams[peerInfo.id.toB58String()] = stream
+    })
+
+    // Listen for peers disconnecting
+    myNode.on('peer:disconnect', (peerInfo) => {
+      let address = peerInfo.id.toB58String()
+      log(`Disconnected from ${address}`)
+      if (streams && streams[address]) delete streams[address]
     })
 
     // Handle incoming connections for the protocol by piping from the stream
     // back to itself (an echo)
-    await listenerNode.handle('/echo/1.0.0',
-      ({ stream }) => {
-        stream.source.then(buff => {
-          var data = JSON.parse(buff.toString());
-
-          debug(this.address +':packet#data', data);
-          this.emit('data', data, data => {
-            debug(this.address +':packet#reply', data);
-            stream.sink(JSON.stringify(data));
-          });
-        })
+    let transform = (() => {
+      let t = this
+      return (source) => {
+        return (async function * () { // A generator is async iterable
+          // For each chunk of data
+          for await (const data of source) {
+            // Output the data
+            log(`received message: ${data.toString()}`)
+            let dataObj = JSON.parse(data.toString());
+            debug(t.address +':packet#data', dataObj);
+            yield await new Promise((resolve, reject) => {
+              t.emit('data', dataObj, data => {
+                debug(t.address + ':packet#reply', data)
+                resolve(JSON.stringify(data))
+              })
+            })
+          }
+        })()
       }
+    })()
+
+    await myNode.handle('/echo/1.0.0',
+      ({ stream }) => {
+      pipe(
+          stream.source,
+          // Decode length-prefixed data
+          lp.decode(),
+          // A transform takes a source, and returns a source.
+          transform,
+          // Encode with length prefix (so receiving side knows how much data is coming)
+          lp.encode(),
+          stream.sink
+        )
+     }
     )
 
     // Start listening
-    await listenerNode.start()
+    await myNode.start()
+
 
     console.log('Listener ready, listening on:')
-    listenerNode.peerInfo.multiaddrs.forEach((ma) => {
-      console.log(ma.toString() + '/p2p/' + listenerId.toB58String())
+    log(`my libp2p node id is ${myNode.peerInfo.id.toB58String()}`)
+    myNode.peerInfo.multiaddrs.forEach((ma) => {
+      console.log(ma.toString())
     })
 
     this.once('end', function enc() {
-      listenerNode.stop();
-    });
+      myNode.stop()
+    })
   }
 
   /**
@@ -130,40 +177,32 @@ class TCPRaft extends LifeRaft {
    * @api private
    */
   async write (packet, fn) {
+    debug(this.address +':packet#write', packet);
     try {
-      if (!this.streams) this.streams = {}
-      let stream = this.streams[this.address]
-      if (!stream) {
-        // Dial to the remote peer (the "listener")
-        const idListenerConfig = peers.find(x => (x.id === this.address))
-        const idListener = await PeerId.createFromJSON(idListenerConfig)
-        // Create a PeerInfo with the listening peer's address
-        const peerListener = new PeerInfo(idListener)
-        peerListener.multiaddrs.add('/ip4/127.0.0.1/tcp/'+idListenerConfig.port)
-
-        // Output this node's address
-        // console.log('Dialer ready, listening on:')
-        // peerListener.multiaddrs.forEach((ma) => {
-        //   console.log(ma.toString() + '/p2p/' + idListener.toB58String())
-        // })
-
-        // Dial to the remote peer (the "listener")
-        let nodeDialer = await nodeDialerPromise
-        const r = await nodeDialer.dialProtocol(peerListener, '/chat/1.0.0')
-        console.log('Dialer dialed to listener on protocol: /chat/1.0.0')
-        stream = r.stream
-
-        this.streams[this.address] = stream
-      }
-
-      await stream.sink(JSON.stringify(packet))
-
-      let buff = await this.streams[this.address].source
-      let data = JSON.parse(buff.toString())
-      debug(this.address +':packet#callback', packet);
-      fn(undefined, data);
+      let stream = streams[this.address]
+      pipe(
+        // Source data
+        [JSON.stringify(packet)],
+        // Encode with length prefix (so receiving side knows how much data is coming)
+        lp.encode(),
+        // Write to the stream, and pass its output to the next function
+        stream,
+        // Decode length-prefixed data
+        lp.decode(),
+        // Sink function
+        async function (source) {
+          // For each chunk of data
+          for await (const data of source) {
+            // Output the data
+            console.log(`received reply: ${data.toString()}`)
+            let dataObj = JSON.parse(data.toString())
+            // debug(this.address +':packet#callback', packet)
+            fn(undefined, dataObj)
+          }
+        }
+      )
     } catch (e) {
-      if (this.streams[this.address]) delete this.streams[this.address]
+      // if (streams && streams[this.address]) delete streams[this.address]
       return fn(e)
     }
   }
@@ -173,15 +212,15 @@ class TCPRaft extends LifeRaft {
 // Now that we have all our variables we can safely start up our server with our
 // assigned port number.
 //
-const raft = new TCPRaft(port, {
+const raft = new TCPRaft(myId, {
   'election min': 2000,
   'election max': 5000,
   'heartbeat': 1000
-});
+})
 
 raft.on('heartbeat timeout', () => {
   debug('heart beat timeout, starting election');
-});
+})
 
 raft.on('term change', (to, from) => {
   debug('were now running on term %s -- was %s', to, from);
@@ -189,25 +228,25 @@ raft.on('term change', (to, from) => {
   debug('we have a new leader to: %s -- was %s', to, from);
 }).on('state change', function (to, from) {
   debug('we have a state to: %s -- was %s', to, from);
-});
+})
 
 raft.on('leader', () => {
   console.log('@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@');
   console.log('I am elected as leader');
   console.log('@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@');
-});
+})
 
 raft.on('candidate', () => {
   console.log('----------------------------------');
   console.log('I am starting as candidate');
   console.log('----------------------------------');
-});
+})
 
 //
 // Join in other nodes so they start searching for each other.
 //
 peers.forEach((nr) => {
-  if (!nr || nr.id === port) return;
+  if (!nr || nr.id === myId) return
 
-  raft.join(nr.id);
-});
+  raft.join(nr.id)
+})
