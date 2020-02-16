@@ -11,7 +11,6 @@
 //    node p2p.js --port 0
 //    node p2p.js --port 1
 //    node p2p.js --port 2
-//    node p2p.js --port 3
 //
 const debug = require('diagnostics')('raft')
   , argv = require('argh').argv
@@ -20,11 +19,15 @@ const debug = require('diagnostics')('raft')
 const wrtc = require('wrtc') // needed when using node
 const WStar = require('libp2p-webrtc-star')
 // our local signaling server
-const webrtcAddr = '/ip4/0.0.0.0/tcp/9090/wss/p2p-webrtc-star'
+const webrtcAddrs = [
+  '/ip4/0.0.0.0/tcp/9090/wss/p2p-webrtc-star',
 // for practical demos and experimentation you can use p2p-webrtc-star signaling server
 // instead of running your own local signaling server
 // it *should not be used for apps in production*:
-// const webrtcAddr = '/dns4/star-signal.cloud.ipfs.team/wss/p2p-webrtc-star'
+// '/dns4/star-signal.cloud.ipfs.team/tcp/443/wss/p2p-webrtc-star'
+// '/dns4/wrtc-star.discovery.libp2p.io/tcp/443/wss/p2p-webrtc-star'
+// '/dns4/ws-star.discovery.libp2p.io/tcp/443/wss/p2p-webrtc-star'
+]
 
 const PeerId = require('peer-id')
 const PeerInfo = require('peer-info')
@@ -72,7 +75,7 @@ class TCPRaft extends LifeRaft {
     // Add the signaling server address, along with our PeerId to our multiaddrs list
     // libp2p will automatically attempt to dial to the signaling server so that it can
     // receive inbound connections from other peers
-    myPeerInfo.multiaddrs.add(webrtcAddr)
+    webrtcAddrs.forEach(webrtcAddr => myPeerInfo.multiaddrs.add(webrtcAddr))
 
     // Create our libp2p node
     const myNode = new libp2p({
@@ -245,7 +248,8 @@ raft.on('candidate', () => {
 //
 // Join in other nodes so they start searching for each other.
 //
-peers.forEach((nr) => {
+peers.forEach((nr, idx) => {
+  if (idx >= 3) return
   if (!nr || nr.id === myId) return
 
   raft.join(nr.id)
