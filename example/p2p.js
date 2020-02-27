@@ -8,13 +8,18 @@
 //    npm i
 //    node node_modules/.bin/star-signal
 // run several nodes
-//    node p2p.js --port 0
-//    node p2p.js --port 1
-//    node p2p.js --port 2
+//    node p2p.js --peer 0 --npeers 3
+//    node p2p.js --peer 1 --npeers 3
+//    node p2p.js --peer 2 --npeers 3
 //
 const debug = require('diagnostics')('raft')
   , argv = require('argh').argv
   , LifeRaft = require('../')
+
+const Log = require('../log')
+const assert = require("assert")
+
+
 
 const wrtc = require('wrtc') // needed when using node
 const WStar = require('libp2p-webrtc-star')
@@ -54,7 +59,15 @@ const peers = require('./peers')
 //
 // The port command line argument is the index of this Node process.
 //
-const myId = peers[+argv.port || 0].id
+const peer = +argv.peer || 0
+const npeers = +argv.npeers || peers.length
+assert.ok(peer < npeers, 'peer too big')
+const myId = peers[peer].id
+
+
+function log(txt) {
+  console.info(txt)
+}
 
 let streams = {}
 
@@ -93,10 +106,6 @@ class TCPRaft extends LifeRaft {
         }
       }
     })
-
-    function log(txt) {
-      console.info(txt)
-    }
 
     // Listen for new peers
     myNode.on('peer:discovery', (peerInfo) => {
@@ -160,10 +169,10 @@ class TCPRaft extends LifeRaft {
     await myNode.start()
 
 
-    console.log('Listener ready, listening on:')
+    log('Listener ready, listening on:')
     log(`my libp2p node id is ${myNode.peerInfo.id.toB58String()}`)
     myNode.peerInfo.multiaddrs.forEach((ma) => {
-      console.log(ma.toString())
+      log(ma.toString())
     })
 
     this.once('end', function enc() {
@@ -197,7 +206,7 @@ class TCPRaft extends LifeRaft {
           // For each chunk of data
           for await (const data of source) {
             // Output the data
-            console.log(`received reply: ${data.toString()}`)
+            log(`received reply: ${data.toString()}`)
             let dataObj = JSON.parse(data.toString())
             // debug(this.address +':packet#callback', packet)
             fn(undefined, dataObj)
@@ -218,7 +227,10 @@ class TCPRaft extends LifeRaft {
 const raft = new TCPRaft(myId, {
   'election min': 2000,
   'election max': 5000,
-  'heartbeat': 1000
+  'heartbeat': 1000,
+  Log,
+  // adapter: require('leveldown'),
+  path: './'+myId
 })
 
 raft.on('heartbeat timeout', () => {
@@ -234,22 +246,32 @@ raft.on('term change', (to, from) => {
 })
 
 raft.on('leader', () => {
-  console.log('@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@');
-  console.log('I am elected as leader');
-  console.log('@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@');
+  log('@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@');
+  log('I am elected as leader');
+  log('@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@');
+  raft.command({name: 'Leader', address: raft.address});
 })
 
 raft.on('candidate', () => {
-  console.log('----------------------------------');
-  console.log('I am starting as candidate');
-  console.log('----------------------------------');
+  log('----------------------------------');
+  log('I am starting as candidate');
+  log('----------------------------------');
 })
 
+raft.on('leader change', (leaderId) => {
+  log('----------------------------------');
+  log('leader changed to '+leaderId);
+  log('----------------------------------');
+})
+
+raft.on('commit',  (command) => {
+  log(`commit ${command.name} ${command.surname}`)
+})
 //
 // Join in other nodes so they start searching for each other.
 //
 peers.forEach((nr, idx) => {
-  if (idx >= 3) return
+  if (idx > npeers) return
   if (!nr || nr.id === myId) return
 
   raft.join(nr.id)
