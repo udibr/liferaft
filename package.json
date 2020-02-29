@@ -34,7 +34,7 @@
     "eventemitter3": "2.0.x",
     "extendible": "0.1.x",
     "immediate": "3.2.x",
-    "leveldown": "^3.0.2",
+    "leveldown": "^5.5.1",
     "levelup": "^2.0.2",
     "libp2p-bootstrap": "^0.10.3",
     "libp2p-webrtc-star": "git+https://github.com/libp2p/js-libp2p-webrtc-star.git",
@@ -42,7 +42,7 @@
     "modification": "1.0.x",
     "one-time": "0.0.x",
     "tick-tock": "1.0.x",
-    "wrtc": "^0.4.3"
+    "wrtc": "^0.4.4"
   },
   "devDependencies": {
     "@babel/cli": "^7.8.4",

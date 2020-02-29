@@ -43,13 +43,13 @@ describe('Leveldown Log', () => {
       command
     });
 
-    const resp = log.has({index: 1, term: 1});
+    const resp = log.has(1) // {index: 1, term: 1});
     assume(resp).true;
 
   });
 
   it('#has returns false for no item', async () => {
-    const resp = log.has({index: 1, term: 1});
+    const resp = log.has(0) // {index: 1, term: 1});
     assume(resp).false;
   });
 
