@@ -69,8 +69,14 @@ function log(txt) {
   console.info(txt)
 }
 
-let streams = {}
+let connectedPeerInfos = {}
 let myNode
+
+async function getPeerInfo(address) {
+  const idConfig = peers.find(x=>(x.id===address))
+  const peerId = await PeerId.createFromJSON(idConfig)
+  return new PeerInfo(peerId)
+}
 
 class TCPRaft extends LifeRaft {
   /**
@@ -80,11 +86,12 @@ class TCPRaft extends LifeRaft {
    * @api private
    */
   async initialize (options) {
-    const myIdConfig = peers.find(x=>(x.id===this.address))
-    const myPeerId = await PeerId.createFromJSON(myIdConfig)
-
-    // Listener libp2p node
-    const myPeerInfo = new PeerInfo(myPeerId)
+    // const myIdConfig = peers.find(x=>(x.id===this.address))
+    // const myPeerId = await PeerId.createFromJSON(myIdConfig)
+    //
+    // // Listener libp2p node
+    // const myPeerInfo = new PeerInfo(myPeerId)
+    const myPeerInfo = await getPeerInfo(this.address)
 
     // Add the signaling server address, along with our PeerId to our multiaddrs list
     // libp2p will automatically attempt to dial to the signaling server so that it can
@@ -117,14 +124,14 @@ class TCPRaft extends LifeRaft {
     myNode.on('peer:connect', async (peerInfo) => {
       let address = peerInfo.id.toB58String()
       log(`connected to ${address} on protocol: /echo/1.0.0`)
-      streams[address] = peerInfo
+      connectedPeerInfos[address] = peerInfo
     })
 
     // Listen for peers disconnecting
     myNode.on('peer:disconnect', async (peerInfo) => {
       let address = peerInfo.id.toB58String()
       log(`Disconnected from ${address}`)
-      if (streams && streams[address]) delete streams[address]
+      if (connectedPeerInfos && connectedPeerInfos[address]) delete connectedPeerInfos[address]
     })
 
     // Handle incoming connections for the protocol by piping from the stream
@@ -189,11 +196,12 @@ class TCPRaft extends LifeRaft {
    * @api private
    */
   async write (packet, fn) {
-    // debug(this.address +':packet#write', packet);
-    let peerInfo = streams[this.address]
+    debug(this.address +':packet#write', packet);
+    let peerInfo = connectedPeerInfos[this.address]
     if (!peerInfo) {
       return fn(Error(`not connected to ${this.address}`))
     }
+
     try {
       const {stream} = await myNode.dialProtocol(peerInfo, '/echo/1.0.0')
       // debug(`dialed ${this.address} on protocol: /echo/1.0.0`)
@@ -224,7 +232,7 @@ class TCPRaft extends LifeRaft {
       )
       stream.close()
     } catch (e) {
-      // if (streams && streams[this.address]) delete streams[this.address]
+      // if (connectedPeerInfos && connectedPeerInfos[this.address]) delete connectedPeerInfos[this.address]
       return fn(e)
     }
   }
