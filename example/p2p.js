@@ -69,14 +69,7 @@ function log(txt) {
   console.info(txt)
 }
 
-let connectedPeerInfos = {}
-let myNode
-
-async function getPeerInfo(address) {
-  const idConfig = peers.find(x=>(x.id===address))
-  const peerId = await PeerId.createFromJSON(idConfig)
-  return new PeerInfo(peerId)
-}
+let streams = {}
 
 class TCPRaft extends LifeRaft {
   /**
@@ -86,12 +79,11 @@ class TCPRaft extends LifeRaft {
    * @api private
    */
   async initialize (options) {
-    // const myIdConfig = peers.find(x=>(x.id===this.address))
-    // const myPeerId = await PeerId.createFromJSON(myIdConfig)
-    //
-    // // Listener libp2p node
-    // const myPeerInfo = new PeerInfo(myPeerId)
-    const myPeerInfo = await getPeerInfo(this.address)
+    const myIdConfig = peers.find(x=>(x.id===this.address))
+    const myPeerId = await PeerId.createFromJSON(myIdConfig)
+
+    // Listener libp2p node
+    const myPeerInfo = new PeerInfo(myPeerId)
 
     // Add the signaling server address, along with our PeerId to our multiaddrs list
     // libp2p will automatically attempt to dial to the signaling server so that it can
@@ -99,7 +91,7 @@ class TCPRaft extends LifeRaft {
     webrtcAddrs.forEach(webrtcAddr => myPeerInfo.multiaddrs.add(webrtcAddr))
 
     // Create our libp2p node
-    myNode = new libp2p({
+    const myNode = new libp2p({
       peerInfo: myPeerInfo,
       modules: {
         transport: [WS, WStar],
@@ -116,22 +108,23 @@ class TCPRaft extends LifeRaft {
     })
 
     // Listen for new peers
-    myNode.on('peer:discovery', async (peerInfo) => {
+    myNode.on('peer:discovery', (peerInfo) => {
       log(`Found peer ${peerInfo.id.toB58String()}`)
     })
 
     // Listen for new connections to peers
     myNode.on('peer:connect', async (peerInfo) => {
-      let address = peerInfo.id.toB58String()
-      log(`connected to ${address} on protocol: /echo/1.0.0`)
-      connectedPeerInfos[address] = peerInfo
+      const { stream } = await myNode.dialProtocol(peerInfo, '/echo/1.0.0')
+
+      log(`dialed ${peerInfo.id.toB58String()} on protocol: /echo/1.0.0`)
+      streams[peerInfo.id.toB58String()] = stream
     })
 
     // Listen for peers disconnecting
-    myNode.on('peer:disconnect', async (peerInfo) => {
+    myNode.on('peer:disconnect', (peerInfo) => {
       let address = peerInfo.id.toB58String()
       log(`Disconnected from ${address}`)
-      if (connectedPeerInfos && connectedPeerInfos[address]) delete connectedPeerInfos[address]
+      if (streams && streams[address]) delete streams[address]
     })
 
     // Handle incoming connections for the protocol by piping from the stream
@@ -143,11 +136,11 @@ class TCPRaft extends LifeRaft {
           // For each chunk of data
           for await (const data of source) {
             // Output the data
+            log(`received message: ${data.toString()}`)
             let dataObj = JSON.parse(data.toString());
             debug(t.address +':packet#data', dataObj);
             yield await new Promise((resolve, reject) => {
-              t.emit('data', dataObj, async (data) => {
-                data = await data
+              t.emit('data', dataObj, data => {
                 debug(t.address + ':packet#reply', data)
                 resolve(JSON.stringify(data))
               })
@@ -158,7 +151,7 @@ class TCPRaft extends LifeRaft {
     })()
 
     await myNode.handle('/echo/1.0.0',
-      async ({ stream }) => {
+      ({ stream }) => {
       pipe(
           stream.source,
           // Decode length-prefixed data
@@ -197,29 +190,9 @@ class TCPRaft extends LifeRaft {
    */
   async write (packet, fn) {
     debug(this.address +':packet#write', packet);
-    let peerInfo = connectedPeerInfos[this.address]
-    if (!peerInfo) {
-      return fn(Error(`not connected to ${this.address}`))
-    }
-
     try {
-      const {stream} = await myNode.dialProtocol(peerInfo, '/echo/1.0.0')
-      // debug(`dialed ${this.address} on protocol: /echo/1.0.0`)
-
-      let sink = (() => {
-        let t = this
-        return async function (source) {
-          // For each chunk of data
-          for await (const data of source) {
-            // Output the data
-            let dataObj = JSON.parse(data.toString())
-            debug(t.address +':packet#callback', packet)
-            fn(undefined, dataObj)
-          }
-        }
-      })()
-
-      await pipe(
+      let stream = streams[this.address]
+      pipe(
         // Source data
         [JSON.stringify(packet)],
         // Encode with length prefix (so receiving side knows how much data is coming)
@@ -228,11 +201,20 @@ class TCPRaft extends LifeRaft {
         stream,
         // Decode length-prefixed data
         lp.decode(),
-        sink
+        // Sink function
+        async function (source) {
+          // For each chunk of data
+          for await (const data of source) {
+            // Output the data
+            log(`received reply: ${data.toString()}`)
+            let dataObj = JSON.parse(data.toString())
+            // debug(this.address +':packet#callback', packet)
+            fn(undefined, dataObj)
+          }
+        }
       )
-      stream.close()
     } catch (e) {
-      // if (connectedPeerInfos && connectedPeerInfos[this.address]) delete connectedPeerInfos[this.address]
+      // if (streams && streams[this.address]) delete streams[this.address]
       return fn(e)
     }
   }
@@ -251,45 +233,45 @@ const raft = new TCPRaft(myId, {
   path: './'+myId
 })
 
-raft.on('heartbeat timeout', async () => {
+raft.on('heartbeat timeout', () => {
   debug('heart beat timeout, starting election');
 })
 
-raft.on('term change', async (to, from) => {
+raft.on('term change', (to, from) => {
   debug('were now running on term %s -- was %s', to, from);
-}).on('leader change',  async (to, from) => {
+}).on('leader change', function (to, from) {
   debug('we have a new leader to: %s -- was %s', to, from);
-}).on('state change', async (to, from) => {
+}).on('state change', function (to, from) {
   debug('we have a state to: %s -- was %s', to, from);
 })
 
-raft.on('leader', async () => {
+raft.on('leader', () => {
   log('@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@');
   log('I am elected as leader');
   log('@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@');
-  raft.command({name: 'udi', surname: 'br'});
+  raft.command({name: 'Leader', address: raft.address});
 })
 
-raft.on('candidate', async () => {
+raft.on('candidate', () => {
   log('----------------------------------');
   log('I am starting as candidate');
   log('----------------------------------');
 })
 
-raft.on('leader change', async (leaderId) => {
+raft.on('leader change', (leaderId) => {
   log('----------------------------------');
   log('leader changed to '+leaderId);
   log('----------------------------------');
 })
 
-raft.on('commit',  async (command) => {
+raft.on('commit',  (command) => {
   log(`commit ${command.name} ${command.surname}`)
 })
 //
 // Join in other nodes so they start searching for each other.
 //
 peers.forEach((nr, idx) => {
-  if (idx >= npeers) return
+  if (idx > npeers) return
   if (!nr || nr.id === myId) return
 
   raft.join(nr.id)
