@@ -172,7 +172,7 @@ class Raft extends EventEmitter {
         reason = 'Stale term detected, received `'+ packet.term +'` we are at '+ raft.term;
         raft.emit('error', new Error(reason));
 
-        return write(raft.packet('error', reason));
+        return write(await raft.packet('error', reason));
       }
 
       //
