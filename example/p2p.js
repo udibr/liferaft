@@ -26,7 +26,6 @@ const WStar = require('libp2p-webrtc-star')
 // our local signaling server
 const webrtcAddrs = [
   '/ip4/0.0.0.0/tcp/9090/wss/p2p-webrtc-star',
-  '/ip4/0.0.0.0/tcp/9091/wss/p2p-webrtc-star',
 // for practical demos and experimentation you can use p2p-webrtc-star signaling server
 // instead of running your own local signaling server
 // it *should not be used for apps in production*:
